@@ -2,12 +2,10 @@ import os
 import praw
 from datetime import datetime
 
-# Read Reddit credentials from environment variables
-REDDIT_CLIENT_ID = os.getenv("vWCbautCz3gU6jSKLwvVyg")
-REDDIT_CLIENT_SECRET = os.getenv("8-vKGAtrRptEzQBGoBMOIqjMuAWfZg")
+REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
+REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET")
 USER_AGENT = "MDTracker by Impossible_Ad346"
 
-# Initialize the Reddit instance using PRAW
 reddit = praw.Reddit(
     client_id=REDDIT_CLIENT_ID,
     client_secret=REDDIT_CLIENT_SECRET,
@@ -15,11 +13,9 @@ reddit = praw.Reddit(
 )
 
 def fetch_and_generate():
-    # Connect to r/premed
     subreddit = reddit.subreddit("premed")
     posts = subreddit.new(limit=10)
 
-    # Build the HTML content
     html_lines = [
         "<!DOCTYPE html>",
         "<html>",
@@ -36,7 +32,6 @@ def fetch_and_generate():
         "<h1>Recent r/premed Posts</h1>"
     ]
 
-    # Add each post to the HTML
     for post in posts:
         html_lines.extend([
             "<div class='post'>",
@@ -47,7 +42,6 @@ def fetch_and_generate():
             "<hr>"
         ])
 
-    # Add a timestamp
     timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     html_lines.extend([
         f"<p>Last updated: {timestamp} UTC</p>",
@@ -55,7 +49,6 @@ def fetch_and_generate():
         "</html>"
     ])
 
-    # Write the HTML content to index.html
     with open("index.html", "w", encoding="utf-8") as f:
         f.write("\n".join(html_lines))
 
