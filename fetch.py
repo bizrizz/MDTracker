@@ -1,93 +1,107 @@
 import os
 import praw
-import re
 from datetime import datetime
 
-# Read credentials from environment variables
+# Read Reddit credentials from environment variables (recommended).
+# For local testing, you can export them like so:
+#   export REDDIT_CLIENT_ID="your_client_id"
+#   export REDDIT_CLIENT_SECRET="your_client_secret"
+#   export USER_AGENT="MDTracker by your_reddit_username"
+
 REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
 REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET")
-USER_AGENT = "MDTracker by Impossible_Ad346"
+USER_AGENT = os.getenv("USER_AGENT", "MDTracker by Impossible_Ad346")
 
+# Initialize the Reddit instance using PRAW
 reddit = praw.Reddit(
     client_id=REDDIT_CLIENT_ID,
     client_secret=REDDIT_CLIENT_SECRET,
     user_agent=USER_AGENT
 )
 
-# Regex pattern to match the interview data fields in the post body.
-# This pattern expects each field on its own line, in the format:
-#
-#   Time Stamp: 2025-03-15
-#   Program: MD
-#   Result: Invite
-#   OMSAS GPA: 3.90
-#   CARS: 129
-#   Casper: ...
-#   Geography: IP
-#   Current year: 4th
-#
-# If users vary from this format, you may need a more flexible approach (e.g. line-by-line parsing).
-pattern = re.compile(
-    r"Time\s*Stamp:\s*(?P<time_stamp>.*?)\r?\n"
-    r"Program:\s*(?P<program>.*?)\r?\n"
-    r"Result:\s*(?P<result>.*?)\r?\n"
-    r"OMSAS\s*GPA:\s*(?P<omsas_gpa>.*?)\r?\n"
-    r"CARS:\s*(?P<cars>.*?)\r?\n"
-    r"Casper:\s*(?P<casper>.*?)\r?\n"
-    r"Geography:\s*(?P<geography>.*?)\r?\n"
-    r"Current\s*year:\s*(?P<current_year>.*?)\r?\n",
-    re.IGNORECASE | re.DOTALL
-)
+def parse_interview_data_line_by_line(text):
+    """
+    Splits the post body (selftext) into lines, looks for known fields, and returns a dict.
+    Example lines expected:
+      Time Stamp: 2025-03-15
+      Program: MD
+      Result: Invite
+      OMSAS GPA: 3.9
+      CARS: 129
+      Casper: ...
+      Geography: IP
+      Current year: 4th
+    This function is case-insensitive for the field names.
+    """
+    data = {}
+    lines = text.splitlines()
 
-def parse_interview_data(post_text):
-    """
-    Search the post text for the interview template fields using our regex pattern.
-    Returns a dictionary of the parsed data if found, otherwise None.
-    """
-    match = pattern.search(post_text)
-    if match:
-        return match.groupdict()
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue  # skip empty lines
+
+        lower_line = line.lower()
+        if lower_line.startswith("time stamp:"):
+            data["time_stamp"] = line.split(":", 1)[1].strip()
+        elif lower_line.startswith("program:"):
+            data["program"] = line.split(":", 1)[1].strip()
+        elif lower_line.startswith("result:"):
+            data["result"] = line.split(":", 1)[1].strip()
+        elif lower_line.startswith("omsas gpa:"):
+            data["omsas_gpa"] = line.split(":", 1)[1].strip()
+        elif lower_line.startswith("cars:"):
+            data["cars"] = line.split(":", 1)[1].strip()
+        elif lower_line.startswith("casper:"):
+            data["casper"] = line.split(":", 1)[1].strip()
+        elif lower_line.startswith("geography:"):
+            data["geography"] = line.split(":", 1)[1].strip()
+        elif lower_line.startswith("current year:"):
+            data["current_year"] = line.split(":", 1)[1].strip()
+
+    # If the post has at least one recognized field, consider it valid for display.
+    # Adjust logic if you require *all* fields to be present.
+    if data:
+        return data
     return None
 
 def fetch_and_generate():
     """
-    1. Fetch recent posts from r/premed (time_filter='year' to limit to this cycle).
-    2. Parse only those that contain the interview data template.
+    1. Fetch recent posts from r/premed.
+    2. Parse only those that contain interview-like data.
     3. Generate an HTML table with the relevant info.
+    4. Write the results to index.html.
     """
+    # Access the r/premed subreddit
     subreddit = reddit.subreddit("premed")
 
-    # You can adjust limit or use pagination. For demonstration, we fetch 200 newest posts from this year.
-    # Or use subreddit.search(...) if you want to specifically look for "Interview" keywords, etc.
-    recent_posts = subreddit.new(limit=200)
+    # We can fetch more posts to increase our chances of finding the interview template.
+    # Adjust as needed. You could also use .search("Interview") if you want to narrow results.
+    posts = subreddit.new(limit=300)
 
-    # We'll store all successful parses here
     parsed_entries = []
 
-    for post in recent_posts:
-        # We only care about text posts (selftext). If it's a link/image post, selftext might be empty.
+    for post in posts:
+        # Only consider text posts (selftext). Link/image posts might not have relevant data.
         if not post.selftext:
             continue
-        
-        data = parse_interview_data(post.selftext)
+
+        data = parse_interview_data_line_by_line(post.selftext)
         if data:
-            # If you only want "Invite" results, uncomment the next line:
-            # if "invite" not in data["result"].lower():
+            # Optionally, filter only "Invite" or "MD" or certain schools, etc.
+            # e.g.:
+            # if "invite" not in data.get("result", "").lower():
             #     continue
 
-            # Optionally filter by Program or year, etc.
-            # e.g., if "MD" in data["program"]:
-
-            # Keep track of which school the user is referencing in the title or text
-            # (If each post includes the school name somewhere, you might parse that too.)
-
-            parsed_entries.append({
+            # Add some metadata
+            entry = {
                 "title": post.title,
                 "permalink": f"https://reddit.com{post.permalink}",
                 **data
-            })
+            }
+            parsed_entries.append(entry)
 
-    # Build an HTML table from parsed_entries
+    # Build the HTML table
     html_lines = [
         "<!DOCTYPE html>",
         "<html>",
@@ -120,14 +134,14 @@ def fetch_and_generate():
     for entry in parsed_entries:
         html_lines.append("<tr>")
         html_lines.append(f"<td><a href='{entry['permalink']}' target='_blank'>{entry['title']}</a></td>")
-        html_lines.append(f"<td>{entry['time_stamp']}</td>")
-        html_lines.append(f"<td>{entry['program']}</td>")
-        html_lines.append(f"<td>{entry['result']}</td>")
-        html_lines.append(f"<td>{entry['omsas_gpa']}</td>")
-        html_lines.append(f"<td>{entry['cars']}</td>")
-        html_lines.append(f"<td>{entry['casper']}</td>")
-        html_lines.append(f"<td>{entry['geography']}</td>")
-        html_lines.append(f"<td>{entry['current_year']}</td>")
+        html_lines.append(f"<td>{entry.get('time_stamp', '')}</td>")
+        html_lines.append(f"<td>{entry.get('program', '')}</td>")
+        html_lines.append(f"<td>{entry.get('result', '')}</td>")
+        html_lines.append(f"<td>{entry.get('omsas_gpa', '')}</td>")
+        html_lines.append(f"<td>{entry.get('cars', '')}</td>")
+        html_lines.append(f"<td>{entry.get('casper', '')}</td>")
+        html_lines.append(f"<td>{entry.get('geography', '')}</td>")
+        html_lines.append(f"<td>{entry.get('current_year', '')}</td>")
         html_lines.append("</tr>")
 
     html_lines.append("</table>")
@@ -135,14 +149,13 @@ def fetch_and_generate():
     # Add a timestamp
     timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     html_lines.append(f"<p>Last updated: {timestamp} UTC</p>")
-
     html_lines.append("</body></html>")
 
-    # Write out the table to index.html (or another file)
+    # Write to index.html
     with open("index.html", "w", encoding="utf-8") as f:
         f.write("\n".join(html_lines))
 
-    print(f"Generated index.html with {len(parsed_entries)} parsed entries.")
+    print(f"Generated index.html with {len(parsed_entries)} entries found.")
 
 if __name__ == "__main__":
     fetch_and_generate()
