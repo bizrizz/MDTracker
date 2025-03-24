@@ -2,12 +2,15 @@ name: Update MDTracker Data
 
 on:
   schedule:
-    - cron: '0 * * * *'  # Runs every hour; adjust as needed
-  workflow_dispatch:     # Allows manual triggering from the Actions tab
+    - cron: '0 * * * *'  # hourly
+  workflow_dispatch:
 
 jobs:
   update-data:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # <-- Add this line
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v3
