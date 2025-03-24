@@ -1,113 +1,111 @@
 import os
+import json
 import praw
+import openai
 from datetime import datetime
 
-# Keywords to look for in the text (broad search)
-KEYWORDS = ["interview", "invite", "out"]
+# --- Configuration: Load credentials from environment variables ---
+REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
+REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET")
+USER_AGENT = os.getenv("USER_AGENT", "MDTracker by Impossible_Ad346")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# The exact required fields (in lowercase for comparison)
-REQUIRED_FIELDS = [
-    "time stamp:",
-    "program:",
-    "result:",
-    "omsas gpa:",
-    "cars:",
-    "casper:",
-    "geography:",
-    "current year:"
-]
+openai.api_key = OPENAI_API_KEY
 
-# Define a timeframe for 2024–2025 cycle.
-# (For example, posts from Jan 1, 2024 to Jan 1, 2026)
-START_TIMESTAMP = 1704067200   # Jan 1, 2024 UTC
-END_TIMESTAMP   = 1767225600   # Jan 1, 2026 UTC
-
-# Initialize Reddit with credentials from environment variables
+# --- Initialize Reddit via PRAW ---
 reddit = praw.Reddit(
-    client_id=os.getenv("REDDIT_CLIENT_ID"),
-    client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
-    user_agent=os.getenv("USER_AGENT", "MDTracker by Impossible_Ad346")
+    client_id=REDDIT_CLIENT_ID,
+    client_secret=REDDIT_CLIENT_SECRET,
+    user_agent=USER_AGENT
 )
 
-def contains_keywords(text):
-    """Return True if any keyword is found in text (case-insensitive)."""
-    lower_text = text.lower()
-    return any(keyword in lower_text for keyword in KEYWORDS)
+# --- Define the OpenAI extraction function ---
+def extract_fields_with_openai(text):
+    """
+    Use the OpenAI API to extract interview data from the given text.
+    The AI will return a JSON object with the following keys:
+      - time_stamp
+      - program
+      - result
+      - omsas_gpa
+      - cars
+      - casper
+      - geography
+      - current_year
+    For any missing fields, the AI will return "N/A".
+    """
+    prompt = f"""
+You are an expert data extractor for medical school interview statistics. Extract the following fields from the provided text:
+1) time_stamp (the date or time information)
+2) program (e.g., MD, MD/PhD, etc.)
+3) result (e.g., Invite, Rejection)
+4) omsas_gpa (if provided)
+5) cars (if provided)
+6) casper (if provided)
+7) geography (e.g., IP/OOP)
+8) current_year (e.g., 3rd, 4th, etc.)
 
-def parse_strict_template(text):
-    """
-    Checks that text contains all required fields (case-insensitive)
-    and parses each field by splitting on ':'.
-    Returns a dict with extracted values if successful; otherwise, None.
-    """
-    text_lower = text.lower()
-    # Ensure all required lines are present
-    if not all(field in text_lower for field in REQUIRED_FIELDS):
+If any field is missing, use "N/A" as its value.
+Return the answer as valid JSON with keys exactly as above.
+
+Text:
+\"\"\"{text}\"\"\"
+"""
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",  # Use a valid model
+            messages=[
+                {"role": "system", "content": "Extract interview data from text."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0,
+            max_tokens=150
+        )
+        # Extract the assistant's reply (assumed to be JSON)
+        reply = response.choices[0].message["content"].strip()
+        data = json.loads(reply)
+        return data
+    except Exception as e:
+        print(f"Error extracting with OpenAI: {e}")
         return None
 
-    data = {}
-    lines = text.splitlines()
-    for line in lines:
-        line_stripped = line.strip()
-        line_lower = line_stripped.lower()
-        if line_lower.startswith("time stamp:"):
-            data["time_stamp"] = line_stripped.split(":", 1)[1].strip()
-        elif line_lower.startswith("program:"):
-            data["program"] = line_stripped.split(":", 1)[1].strip()
-        elif line_lower.startswith("result:"):
-            data["result"] = line_stripped.split(":", 1)[1].strip()
-        elif line_lower.startswith("omsas gpa:"):
-            data["omsas_gpa"] = line_stripped.split(":", 1)[1].strip()
-        elif line_lower.startswith("cars:"):
-            data["cars"] = line_stripped.split(":", 1)[1].strip()
-        elif line_lower.startswith("casper:"):
-            data["casper"] = line_stripped.split(":", 1)[1].strip()
-        elif line_lower.startswith("geography:"):
-            data["geography"] = line_stripped.split(":", 1)[1].strip()
-        elif line_lower.startswith("current year:"):
-            data["current_year"] = line_stripped.split(":", 1)[1].strip()
-    
-    # Only return data if we have all fields
-    if len(data) == len(REQUIRED_FIELDS):
-        return data
-    return None
-
-def fetch_and_generate():
-    """Fetch posts from r/premed, filter by keywords and timeframe, parse the template, and generate index.html."""
+# --- Main function: Scrape Reddit and extract interview data ---
+def main():
+    # For example, fetch the latest 50 posts from r/premed
     subreddit = reddit.subreddit("premed")
-    posts = subreddit.new(limit=500)
-    parsed_entries = []
+    posts = subreddit.new(limit=50)
+    
+    extracted_entries = []
 
+    # Process each post and its comments if they contain keywords
     for post in posts:
-        # Filter by creation time (2024–2025 cycle)
-        if not (START_TIMESTAMP <= post.created_utc < END_TIMESTAMP):
-            continue
+        # Check post's selftext for relevant keywords (case-insensitive)
+        if post.selftext and ("interview" in post.selftext.lower() or "invite" in post.selftext.lower()):
+            print(f"Processing post: {post.title}")
+            extraction = extract_fields_with_openai(post.selftext)
+            if extraction:
+                extraction["source"] = f"Post: {post.title}"
+                extraction["permalink"] = f"https://reddit.com{post.permalink}"
+                extracted_entries.append(extraction)
+        
+        # Process comments in the post
+        post.comments.replace_more(limit=0)
+        for comment in post.comments.list():
+            if comment.body and ("interview" in comment.body.lower() or "invite" in comment.body.lower()):
+                print(f"Processing comment by {comment.author}")
+                extraction = extract_fields_with_openai(comment.body)
+                if extraction:
+                    extraction["source"] = f"Comment in post: {post.title}"
+                    extraction["permalink"] = f"https://reddit.com{comment.permalink}"
+                    extracted_entries.append(extraction)
 
-        # Only consider text posts (selftext must exist)
-        if not post.selftext:
-            continue
-
-        # Broader search: Check if the post contains any of our keywords
-        if not contains_keywords(post.selftext):
-            continue
-
-        # Now try to parse the strict template from the text
-        parsed_data = parse_strict_template(post.selftext)
-        if parsed_data:
-            entry = {
-                "title": post.title,
-                "permalink": f"https://reddit.com{post.permalink}",
-                **parsed_data
-            }
-            parsed_entries.append(entry)
-
-    # Build the HTML table with the parsed data
+    # --- Generate an HTML file with the extracted data ---
     html_lines = [
         "<!DOCTYPE html>",
         "<html>",
         "<head>",
         "<meta charset='utf-8'>",
-        "<title>MDTracker Interview Results (2024-2025)</title>",
+        "<title>Extracted Interview Data</title>",
         "<style>",
         "  body { font-family: Arial, sans-serif; margin: 20px; }",
         "  table { border-collapse: collapse; width: 100%; }",
@@ -116,10 +114,10 @@ def fetch_and_generate():
         "</style>",
         "</head>",
         "<body>",
-        "<h1>MDTracker Interview Results (2024-2025)</h1>",
+        "<h1>Extracted Interview Data from r/premed</h1>",
         "<table>",
         "<tr>",
-        "  <th>Title</th>",
+        "  <th>Source</th>",
         "  <th>Time Stamp</th>",
         "  <th>Program</th>",
         "  <th>Result</th>",
@@ -131,30 +129,30 @@ def fetch_and_generate():
         "  <th>Link</th>",
         "</tr>"
     ]
-    for entry in parsed_entries:
+    
+    for entry in extracted_entries:
         html_lines.append("<tr>")
-        html_lines.append(f"<td>{entry['title']}</td>")
-        html_lines.append(f"<td>{entry['time_stamp']}</td>")
-        html_lines.append(f"<td>{entry['program']}</td>")
-        html_lines.append(f"<td>{entry['result']}</td>")
-        html_lines.append(f"<td>{entry['omsas_gpa']}</td>")
-        html_lines.append(f"<td>{entry['cars']}</td>")
-        html_lines.append(f"<td>{entry['casper']}</td>")
-        html_lines.append(f"<td>{entry['geography']}</td>")
-        html_lines.append(f"<td>{entry['current_year']}</td>")
-        html_lines.append(f"<td><a href='{entry['permalink']}' target='_blank'>Link</a></td>")
+        html_lines.append(f"<td>{entry.get('source', 'N/A')}</td>")
+        html_lines.append(f"<td>{entry.get('time_stamp', 'N/A')}</td>")
+        html_lines.append(f"<td>{entry.get('program', 'N/A')}</td>")
+        html_lines.append(f"<td>{entry.get('result', 'N/A')}</td>")
+        html_lines.append(f"<td>{entry.get('omsas_gpa', 'N/A')}</td>")
+        html_lines.append(f"<td>{entry.get('cars', 'N/A')}</td>")
+        html_lines.append(f"<td>{entry.get('casper', 'N/A')}</td>")
+        html_lines.append(f"<td>{entry.get('geography', 'N/A')}</td>")
+        html_lines.append(f"<td>{entry.get('current_year', 'N/A')}</td>")
+        html_lines.append(f"<td><a href='{entry.get('permalink', '#')}' target='_blank'>Link</a></td>")
         html_lines.append("</tr>")
+    
     html_lines.append("</table>")
-
-    # Append a last updated timestamp
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     html_lines.append(f"<p>Last updated: {timestamp} UTC</p>")
     html_lines.append("</body></html>")
-
+    
     with open("index.html", "w", encoding="utf-8") as f:
         f.write("\n".join(html_lines))
-
-    print(f"Generated index.html with {len(parsed_entries)} entries found.")
+    
+    print(f"Generated index.html with {len(extracted_entries)} entries found.")
 
 if __name__ == "__main__":
-    fetch_and_generate()
+    main()
