@@ -9,7 +9,7 @@ jobs:
   update-data:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # <-- Add this line
+      contents: write
 
     steps:
       - name: Check out repository
@@ -21,12 +21,14 @@ jobs:
           python-version: '3.x'
 
       - name: Install dependencies
-        run: pip install praw
+        run: pip install praw openai
 
       - name: Run fetch script
         env:
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          USER_AGENT: "MDTracker by YourRedditUsername"
         run: python fetch.py
 
       - name: Commit and push changes
